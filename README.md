@@ -1,2 +1,9 @@
 # swat-viewer-app
-A simple web app to analyze SWAT model output
+
+A convenient web app to analyze SWAT model output
+
+Developed using:
+
+Dash
+Flask
+
