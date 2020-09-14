@@ -2,8 +2,12 @@
 
 A convenient web app to analyze SWAT model output
 
-Developed using:
+### Development
 
 Dash
 Flask
 
+
+### Deployment
+
+https://swatviewer.azurewebsites.net
