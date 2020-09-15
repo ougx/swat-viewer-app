@@ -12,7 +12,8 @@ import dash_bootstrap_components as dbc
 import dash_core_components as dcc
 import dash_html_components as html
 import dash_uploader as du
-
+import dash_uploader.settings as settings
+from config import APP_ROOT
 
 def uploadlayout():
     upload_style = {
@@ -25,6 +26,7 @@ def uploadlayout():
     upload_id = uuid.uuid1()
 
     def get_upload_component(id):
+        settings.requests_pathname_prefix = APP_ROOT
         return du.Upload(
             id=id,
             max_file_size=1800,  # 1800 Mb
@@ -36,14 +38,20 @@ def uploadlayout():
     return html.Div([
         html.Div(id='msg_uploader'),
         html.Div([
-            'Instruction: Compress "file.cio", "output.*" and/or "usgs.csv" (optional) '\
-            'into a zip file and upload here',
-            get_upload_component(id='uploader')
-        ]),
+            html.H3('Instruction'),
+            html.P('Compress "file.cio", "output.*" and/or "usgs.csv" (optional) '\
+            'into a zip file and upload here'),
+            get_upload_component(id='uploader'),
+            html.Br(),
+            html.P([
+                'After the upload is completed, it takes 1 - 10 minutes to parse the data depending on the file size of your upload. Please do ',
+                html.B('NOT'),
+                ' refresh your browser or you need to reupload your files.']),
+        ], style={'max-width':'640px'}, className='mx-auto'),
 
-    ])
+    ], style={'width':'100%', 'padding':'20px 50px 5px'})
 
-def subplot(index=0):
+def subplot(index=0, output_keys=[]):
 
     comp_with = 2
 
@@ -51,8 +59,7 @@ def subplot(index=0):
         dcc.Dropdown(
             id={'type': 'plot-output', 'index': index},
             placeholder='Output Type',
-            options=[
-            ],
+            options=[{'label':k, 'value':k} for k in output_keys],
         ),
         id={'type': 'menu', 'index': 10*int(index)+1,},
         md=comp_with,
@@ -97,14 +104,17 @@ def subplot(index=0):
         xs=comp_with*3,
     )
 
-    agg = dbc.Col(
+    misc = dbc.Col(
         dbc.Checklist(
-            id={'type': 'plot-sumspace', 'index': index},
+            id={'type': 'plot-misc', 'index': index},
             options=[
                 {"label": "Areal mean", "value": 1},
+                {"label": "USGS", "value": 2, "disabled": True},
             ],
             value=[],
             className='ml-1',
+            switch=True,
+            inline=True,
         ),
         id={'type': 'menu', 'index': 10*int(index)+5,},
         md=comp_with,
@@ -128,7 +138,7 @@ def subplot(index=0):
     plot = dcc.Graph(id={'type': 'plot-chart', 'index': index}, figure={'layout':{'margin':{'l':0,'r':0,'t':0,'b':0}}})
 
     return html.Div(dcc.Loading([
-        dbc.Row([output, location, var, freq, agg, export],
+        dbc.Row([output, location, var, freq, misc, export],
             no_gutters=True, align='center', justify='center'), #
         plot
     ]), id={'type': 'subplot', 'index': index}, className='my-2 mx-1')
@@ -180,10 +190,10 @@ def homelayout():
     )
 
 pages = OrderedDict(
-    Home =          dict(href="/",           page=homelayout()),
+    #Home =          dict(href="/",           page=homelayout()),
     Upload =        dict(href="/upload/",    page=uploadlayout()),
     Chart =         dict(href="/chart/",     page=chartlayout()),
-    Statistics =    dict(href="/stat/",      page=statlayput()),
+    #Statistics =    dict(href="/stat/",      page=statlayput()),
 )
 
 

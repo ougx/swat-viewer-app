@@ -10,4 +10,4 @@ Flask
 
 ### Deployment
 
-https://swatviewer.azurewebsites.net
+http://nebraska-water.xyz/swatviewer

@@ -21,9 +21,9 @@ from dash.dependencies import ALL, MATCH, Input, Output, State
 from config import UPLOAD_FOLDER_ROOT
 from .layout import subplot
 from .swat_output_reader import read_cio, read_output
+from .usgs_waterdata import read_usgs_streamflow_stage, translate_gage_site_no
 
-
-def load_output(isCompleted, fileNames, upload_id):
+def load_uoload(isCompleted, fileNames, upload_id):
     """read the uploaded zipfile
 
     Args:
@@ -97,13 +97,20 @@ def load_output(isCompleted, fileNames, upload_id):
 
             data['outputs'] = {}
             for file in files:
-                file = file.strip()
+                file = file.strip().lower()
                 if file in acceptable_outputs:
                     with zipfile.open(file) as f:
+                        data['outputs'][file[-3:]] = os.path.join(output_dir, file[-3:] + '.csv')
                         read_output(
                             f, file[-3:], data['ICALEN'], data['IPRINT'], data['output_start_date']
-                        ).to_csv(os.path.join(output_dir, file[-3:] + '.csv'))
-                    data['outputs'][file[-3:]] = os.path.join(output_dir, file[-3:] + '.csv')
+                        ).to_csv(data['outputs'][file[-3:]])
+
+                if file == 'usgs.csv':
+                    with zipfile.open(file) as f:
+                        data['outputs']['usgs'] = os.path.join(output_dir, 'usgs.csv')
+                        csv = pd.read_csv(f).iloc[:, :2]
+                        csv.columns = ['rch', 'site_no']
+                        csv.to_csv(data['outputs']['usgs'], index=False)
 
             results = [
                 data,
@@ -117,7 +124,7 @@ def load_output(isCompleted, fileNames, upload_id):
     return results
 
 
-def add_remove_sub(nadd, nrm, plots):
+def add_remove_sub(nadd, nrm, plots, data):
     """add or remove a subplot
 
     Args:
@@ -135,8 +142,13 @@ def add_remove_sub(nadd, nrm, plots):
         button_id = ctx.triggered[0]['prop_id'].split('.')[0]
 
     if button_id == 'add-sub' and nadd:
+        outputs = []
+        if data:
+            outputs = data.get('outputs', [])
+            if outputs:
+                outputs = [k for k in outputs.keys() if k != 'usgs']
         if nadd > 0:
-            return plots + [subplot(len(plots))], len(plots) + 1
+            return plots + [subplot(len(plots), outputs)], len(plots) + 1
 
     if button_id == 'rm-sub' and nrm:
         if nrm > 0:
@@ -175,8 +187,7 @@ def load_output_type(data, nplot):
         if 'outputs' in data:
             nplot = int(nplot)
             return [
-                [[{'label':k, 'value':k} for k in data['outputs'].keys()]] * nplot,
-                [list(data['outputs'].keys())[0]] * nplot
+                [[{'label':k, 'value':k} for k in data['outputs'].keys() if k != 'usgs']] * nplot,
             ]
     return no_update
 
@@ -191,20 +202,23 @@ def load_output_variables(output, data):
         list: options and values for other subplot menu
     """
     try:
-        # print(output)
-        # print(data)
         if output and data:
             # df = load_outputs_from_local(data, 'output.' + output)
             # if output in session:
             if 'outputs' in data:
                 if os.path.exists(data['outputs'][output]):
 
+                    usgs = 'usgs' in data['outputs'] and output == 'rch'
+
                     df = pd.read_csv(data['outputs'][output], nrows=1, index_col=0)
                     vars = df.columns[2:]
 
                     all_locs = pd.read_csv(data['outputs'][output], usecols=[output.upper()], squeeze=True)
                     locs = all_locs.unique()
-                    # print([[{'label': output + '-' + str(v), 'value':v} for v in locs]])
+                    locs_u = [''] * len(locs)
+                    if usgs:
+                        sits = pd.read_csv(data['outputs']['usgs'])
+                        locs_u = ['u' if l in sits['rch'].values else '' for l in locs]
 
                     iprint = int(data['IPRINT'])
                     if iprint == 0:
@@ -227,58 +241,98 @@ def load_output_variables(output, data):
                         freq_opt = [{'label':'Yearly', 'value':'A.'}]
                         freq_val = 'A.'
 
-                    # sumspace_option = [
-                    #     {'label':'Sum ' + output.upper(), 'value':0}
-                    # ]
+                    misc_options = [
+                        {"label": "Stacked", "value": 'stacked'},
+                        {"label": "USGS", "value": 'usgs', "disabled": not usgs},
+                    ]
+                    misc_value = []
 
                     return [
                         [{'label':v, 'value':v} for v in vars],
                         [vars[0]],
-                        [{'label': output + '-' + str(v), 'value':v} for v in locs],
+                        [{'label': output + '-' + str(v) + u, 'value':v} for v, u in zip(locs, locs_u)],
                         [locs[0]],
                         freq_opt,
                         freq_val,
-                        # sumspace_option
+                        misc_options,
+                        misc_value
                     ]
+        else:
+            return [
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [
+                    {"label": "Stack", "value": 'stack', "disabled": True},
+                    {"label": "USGS", "value": 'usgs', "disabled": True},
+                ],
+                []
+            ]
+
+
     except Exception as e:
         print(e)
         return no_update
 
     return no_update
 
-def filter_data(output, units, vars, freq, sumspace, data):
+def filter_data(output, units, vars, freq, misc, data):
     #TODO 1: add USGS observations when it is plotting streamflows
+    df = None
+    usgs = None
     if output and units and vars and freq and data:
-
         var_s = ['time', output.upper(), 'AREAkm2'] + vars
         df0 = pd.read_csv(data['outputs'][output], index_col='time', usecols=var_s, parse_dates=True)
         df = df0.loc[ df0[output.upper()].isin(units) ].drop('AREAkm2', axis=1)
 
+
+
+        if 'usgs' in misc:
+            sites0 = pd.read_csv(data['outputs']['usgs'])
+            sites0.loc[:,'site_no'] = translate_gage_site_no(sites0.loc[:,'site_no'].values)
+
+            sites = sites0.set_index('rch').squeeze()
+            units = sites.index.intersection(units)
+            if units.shape[0] > 0:
+                sites = sites.loc[units]
+
+                usgs = read_usgs_streamflow_stage(sites.values, begin_date=df.index[0], end_date=df.index[-1])
+                usgs.iloc[:, 1] = usgs.iloc[:, 1] * .3048 ** 3 # unit conversion from cubic feet to cubic meter
+                usgs.columns = [c.replace('datetime', 'time').replace('site_no', 'RCH') for c in usgs.columns]
+                usgs.index.name = 'time'
+                usgs.loc[:,'RCH'] = sites0.set_index('site_no').squeeze().loc[usgs.loc[:,'RCH'].values].values
+
+
         freqs = freq.split('.')
         if freqs[1]:
             df = df.groupby(output.upper()).resample(freqs[0]).agg(freqs[1]).drop(output.upper(), axis=1)
+            if usgs is not None:
+                usgs = usgs.groupby('RCH').resample(freqs[0]).agg(freqs[1]).drop('RCH', axis=1)
         else:
             df = df.reset_index().set_index([output.upper(), 'time'])
+            if usgs is not None:
+                usgs = usgs.reset_index().set_index(['RCH', 'time'])
 
         # calculate the area-weighted mean
-        if sumspace:
-            df_sum = 0
-            area = df0.loc[df0.index[0], [output.upper(), 'AREAkm2']].set_index(output.upper()).squeeze()
-            total_area = 0
-            print(area)
-            for u in units:
-                print(df.loc[u] , area.loc[u])
-                df_sum += df.loc[u] * area.loc[u]
-                total_area += area.loc[u]
-            df = df_sum / total_area
-            df[output.upper()] = 'all'
-            df = df.reset_index().set_index([output.upper(), 'time'])
-    else:
-        df = None
+        # if sumspace:
+        #     df_sum = 0
+        #     area = df0.loc[df0.index[0], [output.upper(), 'AREAkm2']].set_index(output.upper()).squeeze()
+        #     total_area = 0
+        #     print(area)
+        #     for u in units:
+        #         print(df.loc[u] , area.loc[u])
+        #         df_sum += df.loc[u] * area.loc[u]
+        #         total_area += area.loc[u]
+        #     df = df_sum / total_area
+        #     df[output.upper()] = 'all'
+        #     df = df.reset_index().set_index([output.upper(), 'time'])
 
-    return df
+    return df, usgs
 
-def make_plot(output, units, vars, freq, sumspace, data):
+def make_plot(output, units, vars, freq, misc, data):
     """make plot based on the dropdown menu values
 
     Args:
@@ -286,6 +340,7 @@ def make_plot(output, units, vars, freq, sumspace, data):
         units (list): spatial units for the plot
         vars (list): variable names for the plot
         freq (str): frequqncy and the aggregation method
+        misc (dict): misc options (spatial aggregation and usgs gage plots)
         data (dict): dcc.store
 
     Returns:
@@ -293,13 +348,17 @@ def make_plot(output, units, vars, freq, sumspace, data):
         down link for the csv having the plot data
     """
     #TODO 1: add USGS observations when it is plotting streamflows
-    df = filter_data(output, units, vars, freq, sumspace, data)
+    df, usgs = filter_data(output, units, vars, freq, misc, data)
     if df is not None:
-        if sumspace:
-            units = ['all']
         fig_data = []
         for u in units:
             for v in vars:
+
+                if 'stack' in misc:
+                    stackgroup = output # define stack group
+                else:
+                    stackgroup = ''
+
                 fig_data.append(
                     go.Scatter(
                         name=v + ', ' + str(u),
@@ -307,8 +366,24 @@ def make_plot(output, units, vars, freq, sumspace, data):
                         y=df.loc[u][v].values,
                         showlegend=True,
                         mode='lines',
+                        stackgroup = stackgroup,
                     )
                 )
+
+            if 'usgs' in misc:
+                if u in usgs.index:
+                    obs = usgs.loc[ u ].squeeze()
+                    fig_data.append(
+                        go.Scatter(
+                            name='USGS_Qcms, ' + str(u),
+                            x=obs.index,
+                            y=obs.values,
+                            showlegend=True,
+                            mode='lines',
+                            stackgroup = stackgroup,
+                        )
+                    )
+
 
         fig_layout = go.Layout(
             margin=dict(
@@ -344,27 +419,27 @@ def add_callbacks(app):
         [Input('uploader', 'isCompleted')],
         [State('uploader', 'fileNames'),
         State('uploader', 'upload_id')],
-    )(load_output)
+    )(load_uoload)
 
     # add or remove subplots
     app.callback(
         [Output('chart-area', 'children'), Output('nplot', 'children')],
         [Input('add-sub', 'n_clicks'), Input('rm-sub', 'n_clicks')],
-        State('chart-area', 'children')
+        [State('chart-area', 'children'), State('storage_output', 'data')]
     )(add_remove_sub)
 
     # change column number of subplots
     app.callback(
         [Output({'type': 'subplot', 'index': ALL}, 'className'), Output({'type': 'menu', 'index': ALL}, 'md')],
-        Input('n-column', 'value'),
-        State('nplot', 'children')
+        [Input('n-column', 'value')],
+        [State('nplot', 'children')]
     )(change_columns)
 
     # load output dropdown
     app.callback(
-        [Output({'type': 'plot-output', 'index': ALL}, 'options'), Output({'type': 'plot-output', 'index': ALL}, 'value')],
+        [Output({'type': 'plot-output', 'index': ALL}, 'options')],
         [Input('storage_output', 'data')],
-        State('nplot', 'children')
+        [State('nplot', 'children')]
     )(load_output_type)
 
     # load variable and location dropdown
@@ -372,10 +447,10 @@ def add_callbacks(app):
         [Output({'type': 'plot-variable', 'index': MATCH}, 'options'), Output({'type': 'plot-variable', 'index': MATCH}, 'value'),
          Output({'type': 'plot-location', 'index': MATCH}, 'options'), Output({'type': 'plot-location', 'index': MATCH}, 'value'),
          Output({'type': 'plot-freq',     'index': MATCH}, 'options'), Output({'type': 'plot-freq',     'index': MATCH}, 'value'),
-        #  Output({'type': 'plot-sumspace', 'index': MATCH}, 'options')
+         Output({'type': 'plot-misc',     'index': MATCH}, 'options'), Output({'type': 'plot-misc',     'index': MATCH}, 'value')
         ],
-        Input({'type': 'plot-output', 'index': MATCH}, 'value'),
-        State('storage_output', 'data')
+        [Input({'type': 'plot-output', 'index': MATCH}, 'value')],
+        [State('storage_output', 'data')]
     )(load_output_variables)
 
     # make plot
@@ -386,7 +461,7 @@ def add_callbacks(app):
          Input({'type':  'plot-location', 'index': MATCH}, 'value'),
          Input({'type':  'plot-variable', 'index': MATCH}, 'value'),
          Input({'type':  'plot-freq',     'index': MATCH}, 'value'),
-         Input({'type':  'plot-sumspace', 'index': MATCH}, 'value'),
+         Input({'type':  'plot-misc',     'index': MATCH}, 'value'),
          ],
         [State('storage_output', 'data'),
         #  State({'type': 'plot-chart', 'index': MATCH}, 'figure'),

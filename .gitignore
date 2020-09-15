@@ -136,3 +136,4 @@ instance/
 
 # tmp files
 tmp/
+temp/

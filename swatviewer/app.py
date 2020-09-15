@@ -8,11 +8,10 @@ Created on Thu Sep 10 19:14:05 2020
 """
 
 
-
-
 import dash
 import dash_bootstrap_components as dbc
 import dash_uploader as du
+
 import flask
 
 from .callbacks import add_callbacks
@@ -35,6 +34,7 @@ def add_scheduler(scheduler):
 
 
 def init_app():
+
     server = flask.Flask(__name__, instance_relative_config=True)
     server.config.from_object('config')
     server.config.from_pyfile('config.py')
@@ -45,13 +45,17 @@ def init_app():
     app = dash.Dash(
         __name__,
         server=server,
-        external_stylesheets=[dbc.themes.BOOTSTRAP]
+        external_stylesheets=[dbc.themes.BOOTSTRAP],
+        title='SWAT Viewer',
+        requests_pathname_prefix=f'{server.config["APP_ROOT"]}'
     )
 
 
-    app.layout = maintabs
+    du.configure_upload(
+        app, server.config['UPLOAD_FOLDER_ROOT'],
+    )
 
-    du.configure_upload(app, server.config['UPLOAD_FOLDER_ROOT'])
+    app.layout = maintabs
 
     # add call backs
     add_callbacks(app)
@@ -60,6 +64,5 @@ def init_app():
     add_scheduler(scheduler)
 
     scheduler.start()
-    return app.server
-    # return app
+    return app
 
